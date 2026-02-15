@@ -1,0 +1,26 @@
+{
+  "name": "smart-bookmark-app",
+  "version": "1.0.0",
+  "description": "A real-time bookmark manager with Google OAuth authentication",
+  "private": true,
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "start": "cd frontend && npm run start",
+    "lint": "cd frontend && npm run lint",
+    "install-deps": "cd frontend && npm install"
+  },
+  "keywords": [
+    "nextjs",
+    "supabase",
+    "realtime",
+    "bookmarks",
+    "oauth"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/smart-bookmark-app.git"
+  }
+}
