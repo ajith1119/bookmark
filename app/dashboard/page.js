@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import BookmarkForm from '@/components/BookmarkForm'
 import BookmarkList from '@/components/BookmarkList'
@@ -9,15 +9,15 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null)
   const [bookmarks, setBookmarks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 5
   const supabase = useMemo(() => createClient(), [])
 
   useEffect(() => {
     // Get initial user
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user)
-      if (user) {
-        fetchBookmarks()
-      }
+      setLoading(false)
     })
 
     // Listen for auth changes
@@ -26,58 +26,11 @@ export default function DashboardPage() {
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [supabase])
 
-  useEffect(() => {
+  const fetchBookmarks = useCallback(async () => {
     if (!user) return
-
-    // Poll for changes every 2 seconds (fallback when realtime fails)
-    const pollInterval = setInterval(() => {
-      fetchBookmarks()
-    }, 1500)
-
-    // Subscribe to real-time changes
-    const channel = supabase
-      .channel('bookmarks-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'bookmarks',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          console.log('Realtime event:', payload.eventType, payload)
-          if (payload.eventType === 'INSERT') {
-            setBookmarks((current) => [payload.new, ...current])
-          } else if (payload.eventType === 'DELETE') {
-            setBookmarks((current) =>
-              current.filter((bookmark) => bookmark.id !== payload.old.id)
-            )
-          } else if (payload.eventType === 'UPDATE') {
-            setBookmarks((current) =>
-              current.map((bookmark) =>
-                bookmark.id === payload.new.id ? payload.new : bookmark
-              )
-            )
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('Realtime connected - stopping polling')
-          clearInterval(pollInterval)
-        }
-      })
-
-    return () => {
-      clearInterval(pollInterval)
-      supabase.removeChannel(channel)
-    }
-  }, [user, supabase])
-
-  const fetchBookmarks = async () => {
+    
     try {
       const { data, error } = await supabase
         .from('bookmarks')
@@ -91,7 +44,75 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [user, supabase])
+
+  useEffect(() => {
+    if (!user) return
+
+    let isSubscribed = true
+
+    // Fetch initial bookmarks
+    fetchBookmarks()
+
+    // Subscribe to real-time changes
+    const channel = supabase
+      .channel(`bookmarks-${user.id}`, {
+        config: {
+          broadcast: { self: false },
+        },
+      })
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'bookmarks',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (!isSubscribed) return
+          
+          console.log('🔔 Realtime event:', payload.eventType, payload)
+          
+          if (payload.eventType === 'INSERT') {
+            setBookmarks((current) => {
+              // Avoid duplicates
+              if (current.some(b => b.id === payload.new.id)) return current
+              return [payload.new, ...current]
+            })
+          } else if (payload.eventType === 'DELETE') {
+            console.log('🗑️ DELETE event received, removing bookmark:', payload.old)
+            setBookmarks((current) =>
+              current.filter((bookmark) => bookmark.id !== payload.old.id)
+            )
+          } else if (payload.eventType === 'UPDATE') {
+            console.log('✏️ UPDATE event received:', payload.new)
+            setBookmarks((current) =>
+              current.map((bookmark) =>
+                bookmark.id === payload.new.id ? payload.new : bookmark
+              )
+            )
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (!isSubscribed) return
+        
+        console.log('Realtime subscription status:', status)
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Realtime connected successfully')
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Realtime connection error')
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏱️ Realtime connection timed out')
+        }
+      })
+
+    return () => {
+      isSubscribed = false
+      channel.unsubscribe()
+    }
+  }, [user, supabase, fetchBookmarks])
 
   const handleLogout = async () => {
     const form = document.createElement('form')
@@ -111,6 +132,20 @@ export default function DashboardPage() {
       if (error) throw error
     } catch (error) {
       console.error('Error deleting bookmark:', error)
+    }
+  }
+
+  const handleUpdateBookmark = async (id, updates) => {
+    try {
+      const { error } = await supabase
+        .from('bookmarks')
+        .update(updates)
+        .eq('id', id)
+
+      if (error) throw error
+    } catch (error) {
+      console.error('Error updating bookmark:', error)
+      throw error
     }
   }
 
@@ -165,7 +200,14 @@ export default function DashboardPage() {
               <p className="text-gray-600">Loading bookmarks...</p>
             </div>
           ) : (
-            <BookmarkList bookmarks={bookmarks} onDelete={handleDeleteBookmark} />
+            <BookmarkList 
+              bookmarks={bookmarks} 
+              onDelete={handleDeleteBookmark}
+              onUpdate={handleUpdateBookmark}
+              currentPage={currentPage}
+              itemsPerPage={itemsPerPage}
+              onPageChange={setCurrentPage}
+            />
           )}
         </div>
       </main>
